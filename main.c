@@ -15,7 +15,6 @@ delete_all(void)
 {
     Utils utils = saver(NULL);
     delete_expression_tree(utils.parsing_tree, &utils);
-    delete_expression_tree(utils.separate_tree, &utils);
     free((void *) utils.string);
 }
 

@@ -10,6 +10,7 @@ enum Operation
     OP_CONJ, //conjunction
     OP_DISJ, //disjunction
     OP_SEMI, //";" symbol
+    OP_ENDL, //end of line
     OP_PIPE, //pipeline
     OP_PARA, //parallel run
     OP_OUT, //redirection of output
@@ -53,7 +54,6 @@ typedef struct ExpressionTree
 typedef struct Utils
 {
     ExpressionTree *parsing_tree;
-    ExpressionTree *separate_tree;
     const char *string;
     unsigned long long position;
     ErrorContainer container;

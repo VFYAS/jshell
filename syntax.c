@@ -24,13 +24,14 @@ static RedirectionHandle
 parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
 
 static void
-skip_spaces(const char *parse_string, unsigned long long *pos);
+skip_spaces(const char *parse_string, unsigned long long *pos, int skip_endls);
 
 static void
-skip_spaces(const char *parse_string, unsigned long long *pos)
+skip_spaces(const char *parse_string, unsigned long long *pos, int skip_endls)
 {
     unsigned long long auto_pos = *pos;
-    while (isspace(*(parse_string + auto_pos))) {
+    while (isspace(*(parse_string + auto_pos)) &&
+           ((skip_endls == 0) == (*(parse_string + auto_pos) != '\n'))) {
         ++auto_pos;
     }
     *pos = auto_pos;
@@ -39,7 +40,7 @@ skip_spaces(const char *parse_string, unsigned long long *pos)
 static enum Operation
 parse_op(const char *parse_string, unsigned long long *parse_pos)
 {
-    skip_spaces(parse_string, parse_pos);
+    skip_spaces(parse_string, parse_pos, 0);
     if (!parse_string[*parse_pos]) {
         return OP_EOF;
     }
@@ -78,6 +79,9 @@ parse_op(const char *parse_string, unsigned long long *parse_pos)
     case ')':
         opcode = OP_RBR;
         break;
+    case '\n':
+        opcode = OP_ENDL;
+        break;
     default:
         opcode = INV_OP;
         return opcode;
@@ -89,6 +93,10 @@ parse_op(const char *parse_string, unsigned long long *parse_pos)
 static RedirectionHandle
 parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
+    /*
+     * If one command has several redirections of the same kind,
+     * then we use only the last one.
+     */
     unsigned long long prev_pos = *parse_pos;
     enum Operation next_op;
     RedirectionHandle redir = {};
@@ -123,7 +131,7 @@ parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *
             }
             return redir;
         }
-        skip_spaces(parse_string, parse_pos);
+        skip_spaces(parse_string, parse_pos, 0);
 
         const char *runner = parse_string + *parse_pos;
         unsigned long long pos = 0;
@@ -151,11 +159,11 @@ static ExpressionTree *
 parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
     ExpressionTree *res;
-    skip_spaces(parse_string, parse_pos);
+    skip_spaces(parse_string, parse_pos, 0);
     if (parse_string[*parse_pos] == '(') {
         *parse_pos += 1;
         ExpressionTree *term_tree = parse_seps(parse_string, parse_pos, utils);
-        skip_spaces(parse_string, parse_pos);
+        skip_spaces(parse_string, parse_pos, 0);
 
         if (parse_string[*parse_pos] != ')') {
             delete_expression_tree(term_tree, utils);
@@ -195,15 +203,11 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
         res->right->opcode = OP_RBR;
         *parse_pos += 1;
     } else {
-        skip_spaces(parse_string, parse_pos);
+        skip_spaces(parse_string, parse_pos, 0);
         unsigned long long prev_pos = *parse_pos;
         if (parse_op(parse_string, parse_pos) != INV_OP) {
             *parse_pos = prev_pos;
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = NO_OPERAND;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+
             return NULL;
         }
         *parse_pos = prev_pos;
@@ -245,7 +249,7 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
                     return NULL;
                 }
             }
-            skip_spaces(parse_string, parse_pos);
+            skip_spaces(parse_string, parse_pos, 0);
             const char *runner = parse_string + *parse_pos;
             unsigned long long pos = 0;
             while (parse_op(runner, &pos) == INV_OP && !isspace(*runner)) {
@@ -283,7 +287,7 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
 static ExpressionTree *
 parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
-    skip_spaces(parse_string, parse_pos);
+    skip_spaces(parse_string, parse_pos, 0);
     ExpressionTree *tree1 = parse_command(parse_string, parse_pos, utils);
     if (tree1 == NULL) {
         return NULL;
@@ -314,7 +318,6 @@ parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils
             return tree1;
         }
 
-        utils->separate_tree = tree1;
         ExpressionTree *tree2 = parse_command(parse_string, parse_pos, utils);
         if (tree2 == NULL) {
             delete_expression_tree(tree1, utils);
@@ -349,7 +352,7 @@ parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils
 static ExpressionTree *
 parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
-    skip_spaces(parse_string, parse_pos);
+    skip_spaces(parse_string, parse_pos, 0);
     ExpressionTree *tree1 = parse_pipe(parse_string, parse_pos, utils);
     if (tree1 == NULL) {
         return NULL;
@@ -381,7 +384,6 @@ parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *u
             return tree1;
         }
 
-        utils->separate_tree = tree1;
         ExpressionTree *tree2 = parse_pipe(parse_string, parse_pos, utils);
         if (tree2 == NULL) {
             if (!utils->container.err_happened) {
@@ -417,7 +419,7 @@ static ExpressionTree *
 parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
     unsigned long long prev_pos;
-    skip_spaces(parse_string, parse_pos);
+    skip_spaces(parse_string, parse_pos, 0);
     ExpressionTree *tree1 = parse_logicals(parse_string, parse_pos, utils);
     if (tree1 == NULL) {
         return NULL;
@@ -440,6 +442,7 @@ parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils
             return NULL;
         case OP_SEMI:
         case OP_PARA:
+        case OP_ENDL:
             break;
         case OP_RBR:
             *parse_pos = prev_pos;
@@ -447,7 +450,9 @@ parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils
             return tree1;
         }
 
-        utils->separate_tree = tree1;
+        if (op == OP_ENDL) {
+            skip_spaces(parse_string, parse_pos, 1);
+        }
         ExpressionTree *tree2 = parse_logicals(parse_string, parse_pos, utils);
         if (tree2 == NULL && utils->container.err_happened) {
             delete_expression_tree(tree1, utils);
@@ -500,7 +505,7 @@ syntax_analyse(const char *str)
         raise_error(utils.container.place, utils.container.code);
     }
 
-    skip_spaces(str, &pos);
+    skip_spaces(str, &pos, 1);
     if (str[pos] != '\0') {
         if (str[pos] == ')') {
             raise_error(str + pos, BRACKETS_BALANCE);
@@ -521,9 +526,6 @@ delete_expression_tree(ExpressionTree *parse_tree, Utils *utils)
 
         if (parse_tree == utils->parsing_tree) {
             utils->parsing_tree = NULL;
-        }
-        if (parse_tree == utils->separate_tree) {
-            utils->separate_tree = NULL;
         }
 
         for (long long i = 0; i < parse_tree->argc; ++i) {
