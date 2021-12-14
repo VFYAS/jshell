@@ -36,6 +36,7 @@ typedef struct
     struct redirector out;
     struct redirector in;
     struct redirector app;
+    int need_redirect;
 } RedirectionHandle;
 
 typedef struct ExpressionTree
@@ -43,7 +44,7 @@ typedef struct ExpressionTree
     enum Operation opcode;
     struct ExpressionTree *left;
     struct ExpressionTree *right;
-    RedirectionHandle *redirect;
+    RedirectionHandle redirect;
     char **argv;
     long long argc;
     long long cur_argc;
@@ -65,5 +66,8 @@ delete_expression_tree(ExpressionTree *parse_tree, Utils *utils);
 Utils
 syntax_analyse(const char *str);
 // analyses the given expression, converting it into tree
+
+Utils
+saver(Utils *utils);
 
 #endif

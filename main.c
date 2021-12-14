@@ -10,17 +10,6 @@ enum
     INIT_STR_SIZE = 256
 };
 
-Utils
-saver(Utils *utils)
-{
-    static Utils keep;
-    if (utils != NULL) {
-        keep = *utils;
-    }
-    return keep;
-}
-
-
 void
 delete_all(void)
 {
@@ -64,8 +53,6 @@ main(void)
     }
 
     Utils utils = syntax_analyse(str);
-
-    saver(&utils);
 
     return start_execution(&utils);
 }

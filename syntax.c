@@ -20,7 +20,7 @@ static enum Operation
 parse_op(const char *parse_string, unsigned long long *parse_pos);
 // defines which operation is next
 
-static RedirectionHandle *
+static RedirectionHandle
 parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
 
 static void
@@ -86,36 +86,42 @@ parse_op(const char *parse_string, unsigned long long *parse_pos)
     return opcode;
 }
 
-static RedirectionHandle *
+static RedirectionHandle
 parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
 {
     unsigned long long prev_pos = *parse_pos;
     enum Operation next_op;
-    RedirectionHandle *redir = calloc(1, sizeof(*redir));
-    if (redir == NULL) {
-        raise_error(NULL, MEMORY_ERROR);
-    }
+    RedirectionHandle redir = {};
     while ((next_op = parse_op(parse_string, parse_pos)) == OP_APP || next_op == OP_OUT || next_op == OP_INP) {
         struct redirector *curr_redirect;
         switch (next_op) {
         case OP_OUT:
-            redir->out.exists = 1;
-            curr_redirect = &(redir->out);
+            redir.out.exists = redir.need_redirect = 1;
+            curr_redirect = &(redir.out);
             break;
         case OP_INP:
-            redir->in.exists = 1;
-            curr_redirect = &(redir->in);
+            redir.in.exists = redir.need_redirect = 1;
+            curr_redirect = &(redir.in);
             break;
         case OP_APP:
-            redir->app.exists = 1;
-            curr_redirect = &(redir->app);
+            redir.app.exists = redir.need_redirect = 1;
+            curr_redirect = &(redir.app);
             break;
         default:
-            raise_error(NULL, INTERNAL_ERROR);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = INTERNAL_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return redir;
         }
         if (parse_op(parse_string, parse_pos) != INV_OP) {
-            free(redir);
-            raise_error(parse_string + *parse_pos, NO_OPERAND);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = NO_OPERAND;
+                utils->container.place = (char *) (parse_string + *parse_pos - 1);
+            }
+            return redir;
         }
         skip_spaces(parse_string, parse_pos);
 
@@ -127,17 +133,17 @@ parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *
         }
         curr_redirect->file = strndup(parse_string + *parse_pos, runner - parse_string - *parse_pos);
         if (curr_redirect->file == NULL) {
-            free(redir);
-            raise_error(NULL, MEMORY_ERROR);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return redir;
         }
         *parse_pos = runner - parse_string;
         prev_pos = *parse_pos;
     }
     *parse_pos = prev_pos;
-    if (!redir->out.exists && !redir->in.exists && !redir->app.exists) {
-        free(redir);
-        return NULL;
-    }
     return redir;
 }
 
@@ -153,19 +159,39 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
 
         if (parse_string[*parse_pos] != ')') {
             delete_expression_tree(term_tree, utils);
-            raise_error(parse_string + *parse_pos, BRACKETS_BALANCE);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = BRACKETS_BALANCE;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return NULL;
         }
 
         res = calloc(1, sizeof(*res));
 
         if (res == NULL) {
             delete_expression_tree(term_tree, utils);
-            raise_error(NULL, MEMORY_ERROR);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return NULL;
         }
 
         res->opcode = OP_LBR;
         res->left = term_tree;
         res->right = calloc(1, sizeof(*res->right));
+        if (res->right == NULL) {
+            delete_expression_tree(res, utils);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return NULL;
+        }
+
         res->right->opcode = OP_RBR;
         *parse_pos += 1;
     } else {
@@ -173,18 +199,34 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
         unsigned long long prev_pos = *parse_pos;
         if (parse_op(parse_string, parse_pos) != INV_OP) {
             *parse_pos = prev_pos;
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = NO_OPERAND;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
             return NULL;
         }
         *parse_pos = prev_pos;
         res = calloc(1, sizeof *res);
         if (res == NULL) {
-            raise_error(NULL, MEMORY_ERROR);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return NULL;
         }
         res->argc = INIT_ARGC;
         res->argv = calloc(res->argc, sizeof(*res->argv));
 
         if (res->argv == NULL) {
-            raise_error(NULL, MEMORY_ERROR);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            delete_expression_tree(res, utils);
+            return NULL;
         }
 
         res->cur_argc = 0;
@@ -194,8 +236,13 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
                 res->argc <<= 1;
                 res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
                 if (res->argv == NULL) {
+                    if (!utils->container.err_happened) {
+                        utils->container.err_happened = 1;
+                        utils->container.code = MEMORY_ERROR;
+                        utils->container.place = (char *) (parse_string + *parse_pos);
+                    }
                     delete_expression_tree(res, utils);
-                    raise_error(NULL, MEMORY_ERROR);
+                    return NULL;
                 }
             }
             skip_spaces(parse_string, parse_pos);
@@ -214,12 +261,22 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
         res->argc = res->cur_argc + 1;
         res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
         if (res->argv == NULL) {
+            res->argc = 0;
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
             delete_expression_tree(res, utils);
-            raise_error(NULL, MEMORY_ERROR);
+            return NULL;
         }
         res->argv[--res->argc] = NULL;
     }
     res->redirect = parse_redirects(parse_string, parse_pos, utils);
+    if (utils->container.err_happened) {
+        delete_expression_tree(res, utils);
+        return NULL;
+    }
     return res;
 }
 
@@ -240,10 +297,16 @@ parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils
             return tree1;
         case INV_OP:
             delete_expression_tree(tree1, utils);
-            if (isalnum(parse_string[*parse_pos])) {
-                raise_error(parse_string + *parse_pos, NO_OPERATION);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.place = (char *) (parse_string + *parse_pos);
             }
-            raise_error(parse_string + *parse_pos, INVALID_OPERATION);
+            if (isalnum(parse_string[*parse_pos])) {
+                utils->container.code = NO_OPERATION;
+                return NULL;
+            }
+            utils->container.code = INVALID_OPERATION;
+            return NULL;
         case OP_PIPE:
             break;
         default:
@@ -254,12 +317,24 @@ parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils
         utils->separate_tree = tree1;
         ExpressionTree *tree2 = parse_command(parse_string, parse_pos, utils);
         if (tree2 == NULL) {
-            raise_error(parse_string + *parse_pos, NO_OPERAND);
+            delete_expression_tree(tree1, utils);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = NO_OPERAND;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            return NULL;
         }
         ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
             delete_expression_tree(tree2, utils);
-            raise_error(NULL, MEMORY_ERROR);
+            delete_expression_tree(tree1, utils);
+            return NULL;
         }
 
         parent->left = tree1;
@@ -288,10 +363,16 @@ parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *u
             return tree1;
         case INV_OP:
             delete_expression_tree(tree1, utils);
-            if (isalnum(parse_string[*parse_pos])) {
-                raise_error(parse_string + *parse_pos, NO_OPERATION);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.place = (char *) (parse_string + *parse_pos);
             }
-            raise_error(parse_string + *parse_pos, INVALID_OPERATION);
+            if (isalnum(parse_string[*parse_pos])) {
+                utils->container.code = NO_OPERATION;
+                return NULL;
+            }
+            utils->container.code = INVALID_OPERATION;
+            return NULL;
         case OP_DISJ:
         case OP_CONJ:
             break;
@@ -303,12 +384,24 @@ parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *u
         utils->separate_tree = tree1;
         ExpressionTree *tree2 = parse_pipe(parse_string, parse_pos, utils);
         if (tree2 == NULL) {
-            raise_error(parse_string + *parse_pos, NO_OPERAND);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = NO_OPERAND;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            delete_expression_tree(tree1, utils);
+            return NULL;
         }
         ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            delete_expression_tree(tree1, utils);
             delete_expression_tree(tree2, utils);
-            raise_error(NULL, MEMORY_ERROR);
+            return NULL;
         }
 
         parent->left = tree1;
@@ -335,10 +428,16 @@ parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils
         switch (op) {
         case INV_OP:
             delete_expression_tree(tree1, utils);
-            if (isdigit(parse_string[*parse_pos])) {
-                raise_error(parse_string + *parse_pos, NO_OPERATION);
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.place = (char *) (parse_string + *parse_pos);
             }
-            raise_error(parse_string + *parse_pos, INVALID_OPERATION);
+            if (isalnum(parse_string[*parse_pos])) {
+                utils->container.code = NO_OPERATION;
+                return NULL;
+            }
+            utils->container.code = INVALID_OPERATION;
+            return NULL;
         case OP_SEMI:
         case OP_PARA:
             break;
@@ -350,10 +449,20 @@ parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils
 
         utils->separate_tree = tree1;
         ExpressionTree *tree2 = parse_logicals(parse_string, parse_pos, utils);
+        if (tree2 == NULL && utils->container.err_happened) {
+            delete_expression_tree(tree1, utils);
+            return NULL;
+        }
         ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
+            if (!utils->container.err_happened) {
+                utils->container.err_happened = 1;
+                utils->container.code = MEMORY_ERROR;
+                utils->container.place = (char *) (parse_string + *parse_pos);
+            }
+            delete_expression_tree(tree1, utils);
             delete_expression_tree(tree2, utils);
-            raise_error(NULL, MEMORY_ERROR);
+            return NULL;
         }
         parent->left = tree1;
         parent->right = tree2;
@@ -365,13 +474,31 @@ parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils
 }
 
 Utils
+saver(Utils *utils)
+{
+    static Utils keep;
+    if (utils != NULL) {
+        keep = *utils;
+    }
+    return keep;
+}
+
+Utils
 syntax_analyse(const char *str)
 {
-    Utils utils = {NULL, NULL};
+    Utils utils = {};
     unsigned long long pos = 0;
-    utils.parsing_tree = parse_seps(str, &pos, &utils);
     utils.string = str;
     utils.position = 0;
+    utils.container.err_happened = 0;
+    utils.container.place = NULL;
+    utils.parsing_tree = parse_seps(str, &pos, &utils);
+
+    saver(&utils);
+
+    if (utils.container.err_happened) {
+        raise_error(utils.container.place, utils.container.code);
+    }
 
     skip_spaces(str, &pos);
     if (str[pos] != '\0') {
@@ -381,6 +508,7 @@ syntax_analyse(const char *str)
             raise_error(str + pos, INVALID_OPERATION);
         }
     }
+
     return utils;
 }
 
@@ -401,12 +529,10 @@ delete_expression_tree(ExpressionTree *parse_tree, Utils *utils)
         for (long long i = 0; i < parse_tree->argc; ++i) {
             free(parse_tree->argv[i]);
         }
-        if (parse_tree->redirect) {
-            free(parse_tree->redirect->app.file);
-            free(parse_tree->redirect->out.file);
-            free(parse_tree->redirect->in.file);
-            free(parse_tree->redirect);
-        }
+        free(parse_tree->redirect.app.file);
+        free(parse_tree->redirect.out.file);
+        free(parse_tree->redirect.in.file);
+
         free(parse_tree->argv);
         free(parse_tree);
     }
