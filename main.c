@@ -13,9 +13,9 @@ enum
 void
 delete_all(void)
 {
-    Utils utils = saver(NULL);
-    delete_expression_tree(utils.parsing_tree, &utils);
-    free((void *) utils.string);
+    struct SuperStorage storage = saver(NULL);
+    delete_expression_tree(storage.parsing_tree, &storage);
+    free((void *) storage.string);
 }
 
 int
@@ -45,13 +45,8 @@ main(void)
         c = fgetc(stdin);
     }
     str[idx] = '\0';
-    if (c == EOF) {
-        fprintf(stderr, "Incorrect statement!\n");
-        free(str);
-        exit(ERROR_EXIT);
-    }
 
-    Utils utils = syntax_analyse(str);
+    struct SuperStorage storage = syntax_analyse(str);
 
-    return start_execution(&utils);
+    return start_execution(&storage);
 }

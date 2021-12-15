@@ -6,18 +6,19 @@
 #include <sys/prctl.h>
 #include "executor.h"
 #include "error_handler.h"
-
-static int
-execute(ExpressionTree *tree, Utils *utils);
+#include "syntax.h"
 
 static void
-check_redirection(ExpressionTree *tree);
+execute(struct ExpressionTree *tree, struct SuperStorage *storage);
+
+static void
+check_redirection(struct ExpressionTree *tree);
 
 static _Noreturn void
 end_process(int status);
 
 static void
-check_redirection(ExpressionTree *tree)
+check_redirection(struct ExpressionTree *tree)
 {
     /*
      * 1) isatty is used or not used if we want to redirect i/o from
@@ -36,8 +37,8 @@ check_redirection(ExpressionTree *tree)
             }
             close(out);
         }
-        if (tree->redirect.app.exists && isatty(1) && tree->redirect.app.file) {
-            int out = open(tree->redirect.app.file, O_WRONLY | O_CREAT | O_APPEND, 0666);
+        if (tree->redirect.append.exists && isatty(1) && tree->redirect.append.file) {
+            int out = open(tree->redirect.append.file, O_WRONLY | O_CREAT | O_APPEND, 0666);
             if (out < 0 || dup2(out, 1) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
             }
@@ -54,14 +55,14 @@ check_redirection(ExpressionTree *tree)
 }
 
 int
-start_execution(Utils *utils)
+start_execution(struct SuperStorage *storage)
 {
-    prctl(PR_SET_CHILD_SUBREAPER);
+    prctl(PR_SET_CHILD_SUBREAPER); //just for safety reasons
     pid_t pid;
     if ((pid = fork()) < 0) {
         raise_error(NULL, SYSCALL_ERROR);
     } else if (pid == 0) {
-        execute(utils->parsing_tree, utils);
+        execute(storage->parsing_tree, storage);
     }
     pid_t wait_ret;
     int status;
@@ -84,8 +85,8 @@ end_process(int status)
     }
 }
 
-static int
-execute(ExpressionTree *tree, Utils *utils)
+static void
+execute(struct ExpressionTree *tree, struct SuperStorage *storage)
 {
     if (tree == NULL) {
         exit(0);
@@ -101,21 +102,19 @@ execute(ExpressionTree *tree, Utils *utils)
     case OP_EOF:
         exit(0);
     case OP_DISJ:
-        // ||
         reverse = 1;
     case OP_CONJ:
-        // &&
         if ((pid1 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid1 == 0) {
-            execute(tree->left, utils);
+            execute(tree->left, storage);
         }
         waitpid(pid1, &status, 0);
         if ((reverse == 0) == (WIFEXITED(status) && !WEXITSTATUS(status))) {
             if ((pid2 = fork()) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
             } else if (pid2 == 0) {
-                execute(tree->right, utils);
+                execute(tree->right, storage);
             }
         } else {
             end_process(status);
@@ -127,7 +126,7 @@ execute(ExpressionTree *tree, Utils *utils)
         if ((pid1 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid1 == 0) {
-            execute(tree->left, utils);
+            execute(tree->left, storage);
         }
         waitpid(pid1, &status, 0);
         if (tree->right == NULL) {
@@ -136,22 +135,19 @@ execute(ExpressionTree *tree, Utils *utils)
         if ((pid2 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid2 == 0) {
-            execute(tree->right, utils);
+            execute(tree->right, storage);
         }
         waitpid(pid2, &status, 0);
         end_process(status);
     case OP_PIPE:
-        if (pipe(fd) < 0) {
-            raise_error(NULL, SYSCALL_ERROR);
-        }
-        if ((pid1 = fork()) < 0) {
+        if (pipe(fd) < 0 || (pid1 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid1 == 0) {
             if (dup2(fd[1], 1) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
             }
             close(fd[1]);
-            execute(tree->left, utils);
+            execute(tree->left, storage);
         }
         close(fd[1]);
         if ((pid2 = fork()) < 0) {
@@ -161,7 +157,7 @@ execute(ExpressionTree *tree, Utils *utils)
                 raise_error(NULL, SYSCALL_ERROR);
             }
             close(fd[0]);
-            execute(tree->right, utils);
+            execute(tree->right, storage);
         }
         close(fd[0]);
         pid_t wait_ret;
@@ -172,24 +168,24 @@ execute(ExpressionTree *tree, Utils *utils)
         if ((pid1 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid1 == 0) {
-            execute(tree->left, utils);
+            execute(tree->left, storage);
         }
         if ((pid2 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid2 == 0) {
-            execute(tree->right, utils);
+            execute(tree->right, storage);
         }
         while (wait(NULL) > 0) {}
         exit(0);
     case OP_LBR:
         check_redirection(tree);
         if (tree->right->opcode != OP_RBR) {
-            raise_error(utils->string, BRACKETS_BALANCE);
+            raise_error(storage->string, BRACKETS_BALANCE);
         }
         if ((pid1 = fork()) < 0) {
             raise_error(NULL, SYSCALL_ERROR);
         } else if (pid1 == 0) {
-            execute(tree->left, utils);
+            execute(tree->left, storage);
         }
         waitpid(pid1, &status, 0);
         end_process(status);

@@ -1,9 +1,9 @@
 #ifndef SHELL_EXECUTOR_H
 #define SHELL_EXECUTOR_H
 
-#include "syntax.h"
+struct SuperStorage;
 
 int
-start_execution(Utils *utils);
+start_execution(struct SuperStorage *storage);
 
 #endif

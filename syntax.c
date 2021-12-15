@@ -4,60 +4,65 @@
 #include "syntax.h"
 #include "error_handler.h"
 
-static ExpressionTree *
-parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
+static struct ExpressionTree *
+parse_seps(struct SuperStorage *storage);
+// parses separators, that means ";", "&" and end of line
 
-static ExpressionTree *
-parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
+static struct ExpressionTree *
+parse_logicals(struct SuperStorage *storage);
+// parses logical expressions: conjunctions and disjunctions
 
-static ExpressionTree *
-parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
+static struct ExpressionTree *
+parse_pipe(struct SuperStorage *storage);
+// parses pipeline lists
 
-static ExpressionTree *
-parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
+static struct ExpressionTree *
+parse_command(struct SuperStorage *storage);
+// parses the command or the brackets expression
 
 static enum Operation
-parse_op(const char *parse_string, unsigned long long *parse_pos);
+parse_op(struct SuperStorage *storage);
 // defines which operation is next
 
-static RedirectionHandle
-parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils);
+static struct RedirectionHandle
+parse_redirects(struct SuperStorage *storage);
+// parses redirections of i/o of commands
 
 static void
-skip_spaces(const char *parse_string, unsigned long long *pos, int skip_endls);
+skip_spaces(struct SuperStorage *storage, int skip_endls);
 
 static void
-skip_spaces(const char *parse_string, unsigned long long *pos, int skip_endls)
+skip_spaces(struct SuperStorage *storage, int skip_endls)
 {
-    unsigned long long auto_pos = *pos;
-    while (isspace(*(parse_string + auto_pos)) &&
-           ((skip_endls == 0) == (*(parse_string + auto_pos) != '\n'))) {
+    unsigned long long auto_pos = storage->position;
+    while (isspace(*(storage->string + auto_pos)) &&
+           ((skip_endls == 0) == (*(storage->string + auto_pos) != '\n'))) {
         ++auto_pos;
     }
-    *pos = auto_pos;
+    storage->position = auto_pos;
 }
 
 static enum Operation
-parse_op(const char *parse_string, unsigned long long *parse_pos)
+parse_op(struct SuperStorage *storage)
 {
-    skip_spaces(parse_string, parse_pos, 0);
-    if (!parse_string[*parse_pos]) {
+    skip_spaces(storage, 0);
+    if (!storage->string[storage->position]) {
         return OP_EOF;
     }
     enum Operation opcode;
-    switch (parse_string[*parse_pos]) {
+    switch (storage->string[storage->position]) {
     case '&':
-        if (parse_string[*parse_pos + 1] == '&') {
+        if (storage->string[storage->position + 1] == '&') {
             opcode = OP_CONJ;
-            *parse_pos += 1;
+            storage->position += 1;
         } else {
             opcode = OP_PARA;
         }
         break;
     case '|':
-        if (parse_string[*parse_pos + 1] == '|') {
+        if (storage->string[storage->position + 1] == '|') {
             opcode = OP_DISJ;
-            *parse_pos += 1;
+            storage->position += 1;
         } else {
             opcode = OP_PIPE;
         }
@@ -69,9 +74,9 @@ parse_op(const char *parse_string, unsigned long long *parse_pos)
         opcode = OP_INP;
         break;
     case '>':
-        if (parse_string[*parse_pos + 1] == '>') {
+        if (storage->string[storage->position + 1] == '>') {
             opcode = OP_APP;
-            *parse_pos += 1;
+            storage->position += 1;
         } else {
             opcode = OP_OUT;
         }
@@ -86,21 +91,21 @@ parse_op(const char *parse_string, unsigned long long *parse_pos)
         opcode = INV_OP;
         return opcode;
     }
-    *parse_pos += 1;
+    storage->position += 1;
     return opcode;
 }
 
-static RedirectionHandle
-parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
+static struct RedirectionHandle
+parse_redirects(struct SuperStorage *storage)
 {
     /*
      * If one command has several redirections of the same kind,
      * then we use only the last one.
      */
-    unsigned long long prev_pos = *parse_pos;
+    unsigned long long prev_pos = storage->position;
     enum Operation next_op;
-    RedirectionHandle redir = {};
-    while ((next_op = parse_op(parse_string, parse_pos)) == OP_APP || next_op == OP_OUT || next_op == OP_INP) {
+    struct RedirectionHandle redir = {};
+    while ((next_op = parse_op(storage)) == OP_APP || next_op == OP_OUT || next_op == OP_INP) {
         struct redirector *curr_redirect;
         switch (next_op) {
         case OP_OUT:
@@ -112,78 +117,58 @@ parse_redirects(const char *parse_string, unsigned long long *parse_pos, Utils *
             curr_redirect = &(redir.in);
             break;
         case OP_APP:
-            redir.app.exists = redir.need_redirect = 1;
-            curr_redirect = &(redir.app);
+            redir.append.exists = redir.need_redirect = 1;
+            curr_redirect = &(redir.append);
             break;
         default:
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = INTERNAL_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            fill_container(storage, INTERNAL_ERROR);
             return redir;
         }
-        if (parse_op(parse_string, parse_pos) != INV_OP) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = NO_OPERAND;
-                utils->container.place = (char *) (parse_string + *parse_pos - 1);
-            }
+        if (parse_op(storage) != INV_OP) {
+            fill_container(storage, NO_OPERAND);
             return redir;
         }
-        skip_spaces(parse_string, parse_pos, 0);
+        skip_spaces(storage, 0);
 
-        const char *runner = parse_string + *parse_pos;
-        unsigned long long pos = 0;
-        while (parse_op(runner, &pos) == INV_OP && !isspace(*runner)) {
-            pos = 0;
-            ++runner;
+        struct SuperStorage runner_storage = {.position = 0, .string = storage->string + storage->position};
+        while (parse_op(&runner_storage) == INV_OP && !isspace(*runner_storage.string)) {
+            runner_storage.position = 0;
+            ++runner_storage.string;
         }
-        curr_redirect->file = strndup(parse_string + *parse_pos, runner - parse_string - *parse_pos);
+        curr_redirect->file = strndup(storage->string + storage->position,
+                                      runner_storage.string - storage->string - storage->position);
         if (curr_redirect->file == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            fill_container(storage, MEMORY_ERROR);
             return redir;
         }
-        *parse_pos = runner - parse_string;
-        prev_pos = *parse_pos;
+        storage->position = runner_storage.string - storage->string;
+        prev_pos = storage->position;
     }
-    *parse_pos = prev_pos;
+    storage->position = prev_pos;
     return redir;
 }
 
-static ExpressionTree *
-parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
+static struct ExpressionTree *
+parse_command(struct SuperStorage *storage)
 {
-    ExpressionTree *res;
-    skip_spaces(parse_string, parse_pos, 0);
-    if (parse_string[*parse_pos] == '(') {
-        *parse_pos += 1;
-        ExpressionTree *term_tree = parse_seps(parse_string, parse_pos, utils);
-        skip_spaces(parse_string, parse_pos, 0);
+    struct ExpressionTree *res;
+    skip_spaces(storage, 0);
+    if (storage->string[storage->position] == '(') {
+        storage->position += 1;
+        struct ExpressionTree *term_tree = parse_seps(storage);
+        skip_spaces(storage, 0);
 
-        if (parse_string[*parse_pos] != ')') {
-            delete_expression_tree(term_tree, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = BRACKETS_BALANCE;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+        if (storage->string[storage->position] != ')') {
+            delete_expression_tree(term_tree, storage);
+            fill_container(storage, BRACKETS_BALANCE);
             return NULL;
         }
 
         res = calloc(1, sizeof(*res));
 
         if (res == NULL) {
-            delete_expression_tree(term_tree, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            delete_expression_tree(term_tree, storage);
+            fill_container(storage, MEMORY_ERROR);
             return NULL;
         }
 
@@ -191,152 +176,120 @@ parse_command(const char *parse_string, unsigned long long *parse_pos, Utils *ut
         res->left = term_tree;
         res->right = calloc(1, sizeof(*res->right));
         if (res->right == NULL) {
-            delete_expression_tree(res, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            delete_expression_tree(res, storage);
+            fill_container(storage, MEMORY_ERROR);
             return NULL;
         }
 
         res->right->opcode = OP_RBR;
-        *parse_pos += 1;
+        storage->position += 1;
     } else {
-        skip_spaces(parse_string, parse_pos, 0);
-        unsigned long long prev_pos = *parse_pos;
-        if (parse_op(parse_string, parse_pos) != INV_OP) {
-            *parse_pos = prev_pos;
+        skip_spaces(storage, 0);
+        unsigned long long prev_pos = storage->position;
+        if (parse_op(storage) != INV_OP) {
+            storage->position = prev_pos;
 
             return NULL;
         }
-        *parse_pos = prev_pos;
+        storage->position = prev_pos;
         res = calloc(1, sizeof *res);
         if (res == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            fill_container(storage, MEMORY_ERROR);
             return NULL;
         }
         res->argc = INIT_ARGC;
         res->argv = calloc(res->argc, sizeof(*res->argv));
 
         if (res->argv == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(res, utils);
+            fill_container(storage, MEMORY_ERROR);
+            delete_expression_tree(res, storage);
             return NULL;
         }
 
         res->cur_argc = 0;
         res->opcode = OP_COM;
-        while (parse_op(parse_string, parse_pos) == INV_OP) {
+        while (parse_op(storage) == INV_OP) {
             if (res->cur_argc == res->argc) {
                 res->argc <<= 1;
                 res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
                 if (res->argv == NULL) {
-                    if (!utils->container.err_happened) {
-                        utils->container.err_happened = 1;
-                        utils->container.code = MEMORY_ERROR;
-                        utils->container.place = (char *) (parse_string + *parse_pos);
-                    }
-                    delete_expression_tree(res, utils);
+                    fill_container(storage, MEMORY_ERROR);
+                    delete_expression_tree(res, storage);
                     return NULL;
                 }
             }
-            skip_spaces(parse_string, parse_pos, 0);
-            const char *runner = parse_string + *parse_pos;
-            unsigned long long pos = 0;
-            while (parse_op(runner, &pos) == INV_OP && !isspace(*runner)) {
-                pos = 0;
-                ++runner;
+            skip_spaces(storage, 0);
+            struct SuperStorage runner_storage = {.position = 0, .string = storage->string + storage->position};
+            while (parse_op(&runner_storage) == INV_OP && !isspace(*runner_storage.string)) {
+                runner_storage.position = 0;
+                ++runner_storage.string;
             }
-            res->argv[res->cur_argc] = strndup(parse_string + *parse_pos, runner - parse_string - *parse_pos);
-            *parse_pos = runner - parse_string;
-            prev_pos = *parse_pos;
+            res->argv[res->cur_argc] = strndup(storage->string + storage->position,
+                                               runner_storage.string - storage->string - storage->position);
+            storage->position = runner_storage.string - storage->string;
+            prev_pos = storage->position;
             res->cur_argc += 1;
         }
-        *parse_pos = prev_pos;
+        storage->position = prev_pos;
         res->argc = res->cur_argc + 1;
         res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
         if (res->argv == NULL) {
             res->argc = 0;
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(res, utils);
+            fill_container(storage, MEMORY_ERROR);
+            delete_expression_tree(res, storage);
             return NULL;
         }
         res->argv[--res->argc] = NULL;
     }
-    res->redirect = parse_redirects(parse_string, parse_pos, utils);
-    if (utils->container.err_happened) {
-        delete_expression_tree(res, utils);
+    res->redirect = parse_redirects(storage);
+    if (storage->container.err_happened) {
+        delete_expression_tree(res, storage);
         return NULL;
     }
     return res;
 }
 
-static ExpressionTree *
-parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
+static struct ExpressionTree *
+parse_pipe(struct SuperStorage *storage)
 {
-    skip_spaces(parse_string, parse_pos, 0);
-    ExpressionTree *tree1 = parse_command(parse_string, parse_pos, utils);
+    skip_spaces(storage, 0);
+    struct ExpressionTree *tree1 = parse_command(storage);
     if (tree1 == NULL) {
         return NULL;
     }
-    unsigned long long prev_pos = *parse_pos;
+    unsigned long long prev_pos = storage->position;
     while (1) {
-        enum Operation op = parse_op(parse_string, parse_pos);
+        enum Operation op = parse_op(storage);
 
         switch (op) {
         case OP_EOF:
             return tree1;
         case INV_OP:
-            delete_expression_tree(tree1, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            if (isalnum(parse_string[*parse_pos])) {
-                utils->container.code = NO_OPERATION;
+            delete_expression_tree(tree1, storage);
+            if (isalnum(storage->string[storage->position])) {
+                fill_container(storage, NO_OPERATION);
                 return NULL;
             }
-            utils->container.code = INVALID_OPERATION;
+            fill_container(storage, INVALID_OPERATION);
             return NULL;
         case OP_PIPE:
             break;
         default:
-            *parse_pos = prev_pos;
+            storage->position = prev_pos;
             return tree1;
         }
 
-        ExpressionTree *tree2 = parse_command(parse_string, parse_pos, utils);
+        struct ExpressionTree *tree2 = parse_command(storage);
         if (tree2 == NULL) {
-            delete_expression_tree(tree1, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = NO_OPERAND;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
+            delete_expression_tree(tree1, storage);
+            fill_container(storage, NO_OPERAND);
             return NULL;
         }
-        ExpressionTree *parent = calloc(1, sizeof *parent);
+        struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(tree2, utils);
-            delete_expression_tree(tree1, utils);
+            fill_container(storage, MEMORY_ERROR);
+            delete_expression_tree(tree1, storage);
+            delete_expression_tree(tree2, storage);
             return NULL;
         }
 
@@ -344,65 +297,53 @@ parse_pipe(const char *parse_string, unsigned long long *parse_pos, Utils *utils
         parent->right = tree2;
         parent->opcode = op;
         tree1 = parent;
-        utils->parsing_tree = tree1;
-        prev_pos = *parse_pos;
+        storage->parsing_tree = tree1;
+        prev_pos = storage->position;
     }
 }
 
-static ExpressionTree *
-parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
+static struct ExpressionTree *
+parse_logicals(struct SuperStorage *storage)
 {
-    skip_spaces(parse_string, parse_pos, 0);
-    ExpressionTree *tree1 = parse_pipe(parse_string, parse_pos, utils);
+    skip_spaces(storage, 0);
+    struct ExpressionTree *tree1 = parse_pipe(storage);
     if (tree1 == NULL) {
         return NULL;
     }
-    unsigned long long prev_pos = *parse_pos;
+    unsigned long long prev_pos = storage->position;
     while (1) {
-        enum Operation op = parse_op(parse_string, parse_pos);
+        enum Operation op = parse_op(storage);
 
         switch (op) {
         case OP_EOF:
             return tree1;
         case INV_OP:
-            delete_expression_tree(tree1, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            if (isalnum(parse_string[*parse_pos])) {
-                utils->container.code = NO_OPERATION;
+            delete_expression_tree(tree1, storage);
+            if (isalnum(storage->string[storage->position])) {
+                fill_container(storage, NO_OPERATION);
                 return NULL;
             }
-            utils->container.code = INVALID_OPERATION;
+            fill_container(storage, INVALID_OPERATION);
             return NULL;
         case OP_DISJ:
         case OP_CONJ:
             break;
         default:
-            *parse_pos = prev_pos;
+            storage->position = prev_pos;
             return tree1;
         }
 
-        ExpressionTree *tree2 = parse_pipe(parse_string, parse_pos, utils);
+        struct ExpressionTree *tree2 = parse_pipe(storage);
         if (tree2 == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = NO_OPERAND;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(tree1, utils);
+            fill_container(storage, NO_OPERAND);
+            delete_expression_tree(tree1, storage);
             return NULL;
         }
-        ExpressionTree *parent = calloc(1, sizeof *parent);
+        struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(tree1, utils);
-            delete_expression_tree(tree2, utils);
+            fill_container(storage, MEMORY_ERROR);
+            delete_expression_tree(tree1, storage);
+            delete_expression_tree(tree2, storage);
             return NULL;
         }
 
@@ -410,128 +351,119 @@ parse_logicals(const char *parse_string, unsigned long long *parse_pos, Utils *u
         parent->right = tree2;
         parent->opcode = op;
         tree1 = parent;
-        utils->parsing_tree = tree1;
-        prev_pos = *parse_pos;
+        storage->parsing_tree = tree1;
+        prev_pos = storage->position;
     }
 }
 
-static ExpressionTree *
-parse_seps(const char *parse_string, unsigned long long *parse_pos, Utils *utils)
+static struct ExpressionTree *
+parse_seps(struct SuperStorage *storage)
 {
     unsigned long long prev_pos;
-    skip_spaces(parse_string, parse_pos, 0);
-    ExpressionTree *tree1 = parse_logicals(parse_string, parse_pos, utils);
+    skip_spaces(storage, 0);
+    struct ExpressionTree *tree1 = parse_logicals(storage);
     if (tree1 == NULL) {
         return NULL;
     }
-    prev_pos = *parse_pos;
+    prev_pos = storage->position;
     while (1) {
-        enum Operation op = parse_op(parse_string, parse_pos);
+        enum Operation op = parse_op(storage);
         switch (op) {
         case INV_OP:
-            delete_expression_tree(tree1, utils);
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            if (isalnum(parse_string[*parse_pos])) {
-                utils->container.code = NO_OPERATION;
+            delete_expression_tree(tree1, storage);
+            if (isalnum(storage->string[storage->position])) {
+                fill_container(storage, NO_OPERATION);
                 return NULL;
             }
-            utils->container.code = INVALID_OPERATION;
+            fill_container(storage, INVALID_OPERATION);
             return NULL;
         case OP_SEMI:
         case OP_PARA:
         case OP_ENDL:
             break;
         case OP_RBR:
-            *parse_pos = prev_pos;
+            storage->position = prev_pos;
         default:
             return tree1;
         }
 
         if (op == OP_ENDL) {
-            skip_spaces(parse_string, parse_pos, 1);
+            skip_spaces(storage, 1);
         }
-        ExpressionTree *tree2 = parse_logicals(parse_string, parse_pos, utils);
-        if (tree2 == NULL && utils->container.err_happened) {
-            delete_expression_tree(tree1, utils);
+        struct ExpressionTree *tree2 = parse_logicals(storage);
+        if (tree2 == NULL && storage->container.err_happened) {
+            delete_expression_tree(tree1, storage);
             return NULL;
         }
-        ExpressionTree *parent = calloc(1, sizeof *parent);
+        struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            if (!utils->container.err_happened) {
-                utils->container.err_happened = 1;
-                utils->container.code = MEMORY_ERROR;
-                utils->container.place = (char *) (parse_string + *parse_pos);
-            }
-            delete_expression_tree(tree1, utils);
-            delete_expression_tree(tree2, utils);
+            fill_container(storage, MEMORY_ERROR);
+            delete_expression_tree(tree1, storage);
+            delete_expression_tree(tree2, storage);
             return NULL;
         }
         parent->left = tree1;
         parent->right = tree2;
         parent->opcode = op;
         tree1 = parent;
-        utils->parsing_tree = parent;
-        prev_pos = *parse_pos;
+        storage->parsing_tree = parent;
+        prev_pos = storage->position;
     }
 }
 
-Utils
-saver(Utils *utils)
+struct SuperStorage
+saver(struct SuperStorage *storage)
 {
-    static Utils keep;
-    if (utils != NULL) {
-        keep = *utils;
+    static struct SuperStorage keep = {};
+    if (storage != NULL) {
+        keep = *storage;
     }
     return keep;
 }
 
-Utils
+struct SuperStorage
 syntax_analyse(const char *str)
 {
-    Utils utils = {};
-    unsigned long long pos = 0;
-    utils.string = str;
-    utils.position = 0;
-    utils.container.err_happened = 0;
-    utils.container.place = NULL;
-    utils.parsing_tree = parse_seps(str, &pos, &utils);
+    struct SuperStorage storage = {};
+    storage.string = str;
+    storage.position = 0;
+    storage.container.err_happened = 0;
+    storage.container.place = NULL;
+    storage.parsing_tree = parse_seps(&storage);
 
-    saver(&utils);
+    saver(&storage);
 
-    if (utils.container.err_happened) {
-        raise_error(utils.container.place, utils.container.code);
+    if (storage.container.err_happened) {
+        raise_error(storage.container.place, storage.container.code);
     }
 
-    skip_spaces(str, &pos, 1);
-    if (str[pos] != '\0') {
-        if (str[pos] == ')') {
-            raise_error(str + pos, BRACKETS_BALANCE);
+    skip_spaces(&storage, 1);
+    if (storage.string[storage.position] != '\0') {
+        if (storage.string[storage.position] == ')') {
+            raise_error(storage.string + storage.position, BRACKETS_BALANCE);
         } else {
-            raise_error(str + pos, INVALID_OPERATION);
+            raise_error(storage.string + storage.position, INVALID_OPERATION);
         }
     }
 
-    return utils;
+    return storage;
 }
 
 void
-delete_expression_tree(ExpressionTree *parse_tree, Utils *utils)
+delete_expression_tree(struct ExpressionTree *parse_tree, struct SuperStorage *storage)
 {
     if (parse_tree != NULL) {
-        delete_expression_tree(parse_tree->left, utils);
-        delete_expression_tree(parse_tree->right, utils);
+        delete_expression_tree(parse_tree->left, storage);
+        delete_expression_tree(parse_tree->right, storage);
 
-        if (parse_tree == utils->parsing_tree) {
-            utils->parsing_tree = NULL;
+        if (parse_tree == storage->parsing_tree) {
+            storage->parsing_tree = NULL;
         }
 
         for (long long i = 0; i < parse_tree->argc; ++i) {
             free(parse_tree->argv[i]);
         }
-        free(parse_tree->redirect.app.file);
+        free(parse_tree->redirect.append.file);
         free(parse_tree->redirect.out.file);
         free(parse_tree->redirect.in.file);
 

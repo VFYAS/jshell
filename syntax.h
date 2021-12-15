@@ -14,7 +14,7 @@ enum Operation
     OP_PIPE, //pipeline
     OP_PARA, //parallel run
     OP_OUT, //redirection of output
-    OP_APP, //redirection of output on append
+    OP_APP, //redirection of output to append
     OP_INP, //redirection of input
     OP_LBR, //opening bracket
     OP_RBR, //closing bracket
@@ -25,6 +25,7 @@ enum
 {
     INIT_ARGC = 6
 };
+// the initial amount of a command's arguments
 
 struct redirector
 {
@@ -32,42 +33,44 @@ struct redirector
     int exists;
 };
 
-typedef struct
+struct RedirectionHandle
 {
     struct redirector out;
     struct redirector in;
-    struct redirector app;
+    struct redirector append;
     int need_redirect;
-} RedirectionHandle;
+};
 
-typedef struct ExpressionTree
+struct ExpressionTree
 {
     enum Operation opcode;
     struct ExpressionTree *left;
     struct ExpressionTree *right;
-    RedirectionHandle redirect;
+    struct RedirectionHandle redirect;
     char **argv;
     long long argc;
     long long cur_argc;
-} ExpressionTree;
+};
 
-typedef struct Utils
+struct SuperStorage
 {
-    ExpressionTree *parsing_tree;
+    struct ExpressionTree *parsing_tree;
     const char *string;
     unsigned long long position;
     ErrorContainer container;
-} Utils;
+};
 
 void
-delete_expression_tree(ExpressionTree *parse_tree, Utils *utils);
+delete_expression_tree(struct ExpressionTree *parse_tree, struct SuperStorage *storage);
 // frees up the memory used by shell
 
-Utils
+struct SuperStorage
 syntax_analyse(const char *str);
 // analyses the given expression, converting it into tree
 
-Utils
-saver(Utils *utils);
+struct SuperStorage
+saver(struct SuperStorage *storage);
+// memorizes the given struct data if it's not NULL
+// if NULL, returns the last saved struct
 
 #endif
