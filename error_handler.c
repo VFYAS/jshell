@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 void
-fill_container(struct SuperStorage *storage, enum ErrorCode code)
+set_error_number(struct SuperStorage *storage, enum ErrorCode code)
 {
     if (!storage->container.err_happened) {
         storage->container.err_happened = 1;

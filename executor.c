@@ -21,11 +21,11 @@ static void
 check_redirection(struct ExpressionTree *tree)
 {
     /*
-     * 1) isatty is used or not used if we want to redirect i/o from
-     * the centre of pipeline to the file or to the next command.
+     * 1) isatty is used to prevent the redirection i/o from
+     * the centre of pipeline to the file.
      * For example, it defines the behavior of the program in situation
      * "ls | cat > out | wc". If the isatty is used, the redirection in
-     * the said example would be ignored.
+     * the said example will be ignored.
      * 2) If one command is used with ">" and ">>", then only the ">>"
      * file is redirected, the ">" file is just truncated.
      */
@@ -57,16 +57,17 @@ check_redirection(struct ExpressionTree *tree)
 int
 start_execution(struct SuperStorage *storage)
 {
-    prctl(PR_SET_CHILD_SUBREAPER); //just for safety reasons
+    prctl(PR_SET_CHILD_SUBREAPER); // just for safety reasons
     pid_t pid;
     if ((pid = fork()) < 0) {
         raise_error(NULL, SYSCALL_ERROR);
     } else if (pid == 0) {
         execute(storage->parsing_tree, storage);
     }
-    pid_t wait_ret;
     int status;
-    while ((wait_ret = wait(&status)) != pid && wait_ret > 0) {}
+    if (waitpid(pid, &status, 0) <= 0) {
+        raise_error(NULL, INTERNAL_ERROR);
+    }
     while (wait(NULL) > 0) {}
     if (WIFEXITED(status)) {
         return (WEXITSTATUS(status));

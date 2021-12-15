@@ -12,13 +12,16 @@ enum Operation
     OP_SEMI, //";" symbol
     OP_ENDL, //end of line
     OP_PIPE, //pipeline
-    OP_PARA, //parallel run
+    OP_PARA, //parallel run, "&"
     OP_OUT, //redirection of output
     OP_APP, //redirection of output to append
     OP_INP, //redirection of input
     OP_LBR, //opening bracket
     OP_RBR, //closing bracket
-    INV_OP //invalid operation
+    INV_OP /*
+ * invalid operation, used to determine the text entity,
+ * that means the command name, arguments or a redirection file
+ */
 };
 
 enum

@@ -25,7 +25,7 @@ parse_op(struct SuperStorage *storage);
 // defines which operation is next
 
 static struct RedirectionHandle
-parse_redirects(struct SuperStorage *storage);
+parse_redirects(struct SuperStorage *storage, struct RedirectionHandle redirect);
 // parses redirections of i/o of commands
 
 static void
@@ -96,37 +96,39 @@ parse_op(struct SuperStorage *storage)
 }
 
 static struct RedirectionHandle
-parse_redirects(struct SuperStorage *storage)
+parse_redirects(struct SuperStorage *storage, struct RedirectionHandle redirect)
 {
     /*
      * If one command has several redirections of the same kind,
-     * then we use only the last one.
+     * then we only use the last one.
      */
     unsigned long long prev_pos = storage->position;
     enum Operation next_op;
-    struct RedirectionHandle redir = {};
     while ((next_op = parse_op(storage)) == OP_APP || next_op == OP_OUT || next_op == OP_INP) {
         struct redirector *curr_redirect;
         switch (next_op) {
         case OP_OUT:
-            redir.out.exists = redir.need_redirect = 1;
-            curr_redirect = &(redir.out);
+            free(redirect.out.file);
+            redirect.out.exists = redirect.need_redirect = 1;
+            curr_redirect = &(redirect.out);
             break;
         case OP_INP:
-            redir.in.exists = redir.need_redirect = 1;
-            curr_redirect = &(redir.in);
+            free(redirect.in.file);
+            redirect.in.exists = redirect.need_redirect = 1;
+            curr_redirect = &(redirect.in);
             break;
         case OP_APP:
-            redir.append.exists = redir.need_redirect = 1;
-            curr_redirect = &(redir.append);
+            free(redirect.append.file);
+            redirect.append.exists = redirect.need_redirect = 1;
+            curr_redirect = &(redirect.append);
             break;
         default:
-            fill_container(storage, INTERNAL_ERROR);
-            return redir;
+            set_error_number(storage, INTERNAL_ERROR);
+            return redirect;
         }
         if (parse_op(storage) != INV_OP) {
-            fill_container(storage, NO_OPERAND);
-            return redir;
+            set_error_number(storage, NO_OPERAND);
+            return redirect;
         }
         skip_spaces(storage, 0);
 
@@ -138,14 +140,14 @@ parse_redirects(struct SuperStorage *storage)
         curr_redirect->file = strndup(storage->string + storage->position,
                                       runner_storage.string - storage->string - storage->position);
         if (curr_redirect->file == NULL) {
-            fill_container(storage, MEMORY_ERROR);
-            return redir;
+            set_error_number(storage, MEMORY_ERROR);
+            return redirect;
         }
         storage->position = runner_storage.string - storage->string;
         prev_pos = storage->position;
     }
     storage->position = prev_pos;
-    return redir;
+    return redirect;
 }
 
 static struct ExpressionTree *
@@ -160,7 +162,7 @@ parse_command(struct SuperStorage *storage)
 
         if (storage->string[storage->position] != ')') {
             delete_expression_tree(term_tree, storage);
-            fill_container(storage, BRACKETS_BALANCE);
+            set_error_number(storage, BRACKETS_BALANCE);
             return NULL;
         }
 
@@ -168,7 +170,7 @@ parse_command(struct SuperStorage *storage)
 
         if (res == NULL) {
             delete_expression_tree(term_tree, storage);
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             return NULL;
         }
 
@@ -177,31 +179,36 @@ parse_command(struct SuperStorage *storage)
         res->right = calloc(1, sizeof(*res->right));
         if (res->right == NULL) {
             delete_expression_tree(res, storage);
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             return NULL;
         }
 
         res->right->opcode = OP_RBR;
         storage->position += 1;
+
+        res->redirect = parse_redirects(storage, res->redirect);
+        if (storage->container.err_happened) {
+            delete_expression_tree(res, storage);
+            return NULL;
+        }
     } else {
         skip_spaces(storage, 0);
         unsigned long long prev_pos = storage->position;
         if (parse_op(storage) != INV_OP) {
             storage->position = prev_pos;
-
             return NULL;
         }
         storage->position = prev_pos;
         res = calloc(1, sizeof *res);
         if (res == NULL) {
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             return NULL;
         }
         res->argc = INIT_ARGC;
         res->argv = calloc(res->argc, sizeof(*res->argv));
 
         if (res->argv == NULL) {
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             delete_expression_tree(res, storage);
             return NULL;
         }
@@ -213,7 +220,7 @@ parse_command(struct SuperStorage *storage)
                 res->argc <<= 1;
                 res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
                 if (res->argv == NULL) {
-                    fill_container(storage, MEMORY_ERROR);
+                    set_error_number(storage, MEMORY_ERROR);
                     delete_expression_tree(res, storage);
                     return NULL;
                 }
@@ -227,6 +234,11 @@ parse_command(struct SuperStorage *storage)
             res->argv[res->cur_argc] = strndup(storage->string + storage->position,
                                                runner_storage.string - storage->string - storage->position);
             storage->position = runner_storage.string - storage->string;
+            res->redirect = parse_redirects(storage, res->redirect);
+            if (storage->container.err_happened) {
+                delete_expression_tree(res, storage);
+                return NULL;
+            }
             prev_pos = storage->position;
             res->cur_argc += 1;
         }
@@ -235,16 +247,11 @@ parse_command(struct SuperStorage *storage)
         res->argv = realloc(res->argv, res->argc * sizeof(*res->argv));
         if (res->argv == NULL) {
             res->argc = 0;
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             delete_expression_tree(res, storage);
             return NULL;
         }
         res->argv[--res->argc] = NULL;
-    }
-    res->redirect = parse_redirects(storage);
-    if (storage->container.err_happened) {
-        delete_expression_tree(res, storage);
-        return NULL;
     }
     return res;
 }
@@ -266,11 +273,7 @@ parse_pipe(struct SuperStorage *storage)
             return tree1;
         case INV_OP:
             delete_expression_tree(tree1, storage);
-            if (isalnum(storage->string[storage->position])) {
-                fill_container(storage, NO_OPERATION);
-                return NULL;
-            }
-            fill_container(storage, INVALID_OPERATION);
+            set_error_number(storage, INVALID_OPERATION);
             return NULL;
         case OP_PIPE:
             break;
@@ -282,12 +285,12 @@ parse_pipe(struct SuperStorage *storage)
         struct ExpressionTree *tree2 = parse_command(storage);
         if (tree2 == NULL) {
             delete_expression_tree(tree1, storage);
-            fill_container(storage, NO_OPERAND);
+            set_error_number(storage, NO_OPERAND);
             return NULL;
         }
         struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             delete_expression_tree(tree1, storage);
             delete_expression_tree(tree2, storage);
             return NULL;
@@ -319,11 +322,7 @@ parse_logicals(struct SuperStorage *storage)
             return tree1;
         case INV_OP:
             delete_expression_tree(tree1, storage);
-            if (isalnum(storage->string[storage->position])) {
-                fill_container(storage, NO_OPERATION);
-                return NULL;
-            }
-            fill_container(storage, INVALID_OPERATION);
+            set_error_number(storage, INVALID_OPERATION);
             return NULL;
         case OP_DISJ:
         case OP_CONJ:
@@ -335,13 +334,13 @@ parse_logicals(struct SuperStorage *storage)
 
         struct ExpressionTree *tree2 = parse_pipe(storage);
         if (tree2 == NULL) {
-            fill_container(storage, NO_OPERAND);
+            set_error_number(storage, NO_OPERAND);
             delete_expression_tree(tree1, storage);
             return NULL;
         }
         struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             delete_expression_tree(tree1, storage);
             delete_expression_tree(tree2, storage);
             return NULL;
@@ -371,11 +370,7 @@ parse_seps(struct SuperStorage *storage)
         switch (op) {
         case INV_OP:
             delete_expression_tree(tree1, storage);
-            if (isalnum(storage->string[storage->position])) {
-                fill_container(storage, NO_OPERATION);
-                return NULL;
-            }
-            fill_container(storage, INVALID_OPERATION);
+            set_error_number(storage, INVALID_OPERATION);
             return NULL;
         case OP_SEMI:
         case OP_PARA:
@@ -397,7 +392,7 @@ parse_seps(struct SuperStorage *storage)
         }
         struct ExpressionTree *parent = calloc(1, sizeof *parent);
         if (parent == NULL) {
-            fill_container(storage, MEMORY_ERROR);
+            set_error_number(storage, MEMORY_ERROR);
             delete_expression_tree(tree1, storage);
             delete_expression_tree(tree2, storage);
             return NULL;
@@ -445,7 +440,6 @@ syntax_analyse(const char *str)
             raise_error(storage.string + storage.position, INVALID_OPERATION);
         }
     }
-
     return storage;
 }
 

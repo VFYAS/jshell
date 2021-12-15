@@ -30,7 +30,7 @@ raise_error(const char *error_string, enum ErrorCode ErrorCode);
 // prints the error message to stderr and terminates the process
 
 void
-fill_container(struct SuperStorage *storage, enum ErrorCode code);
-//fills the error container with provided error code
+set_error_number(struct SuperStorage *storage, enum ErrorCode code);
+// fills the error container with provided error code
 
 #endif
