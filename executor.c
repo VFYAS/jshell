@@ -21,30 +21,25 @@ static void
 check_redirection(struct ExpressionTree *tree)
 {
     /*
-     * 1) isatty is used to prevent the redirection i/o from
-     * the centre of pipeline to the file.
-     * For example, it defines the behavior of the program in situation
-     * "ls | cat > out | wc". If the isatty is used, the redirection in
-     * the said example will be ignored.
-     * 2) If one command is used with ">" and ">>", then only the ">>"
+     * If one command is used with ">" and ">>", then only the ">>"
      * file is redirected, the ">" file is just truncated.
      */
     if (tree->redirect.need_redirect) {
-        if (tree->redirect.out.exists && isatty(1) && tree->redirect.out.file) {
+        if (tree->redirect.out.exists && tree->redirect.out.file) {
             int out = open(tree->redirect.out.file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
             if (out < 0 || dup2(out, 1) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
             }
             close(out);
         }
-        if (tree->redirect.append.exists && isatty(1) && tree->redirect.append.file) {
+        if (tree->redirect.append.exists && tree->redirect.append.file) {
             int out = open(tree->redirect.append.file, O_WRONLY | O_CREAT | O_APPEND, 0666);
             if (out < 0 || dup2(out, 1) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
             }
             close(out);
         }
-        if (tree->redirect.in.exists && isatty(0) && tree->redirect.in.file) {
+        if (tree->redirect.in.exists && tree->redirect.in.file) {
             int in = open(tree->redirect.in.file, O_RDONLY);
             if (in < 0 || dup2(in, 0) < 0) {
                 raise_error(NULL, SYSCALL_ERROR);
