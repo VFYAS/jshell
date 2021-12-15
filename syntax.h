@@ -58,7 +58,7 @@ struct ExpressionTree
 struct SuperStorage
 {
     struct ExpressionTree *parsing_tree;
-    const char *string;
+    char *string;
     unsigned long long position;
     ErrorContainer container;
 };
@@ -68,7 +68,7 @@ delete_expression_tree(struct ExpressionTree *parse_tree, struct SuperStorage *s
 // frees up the memory used by shell
 
 struct SuperStorage
-syntax_analyse(const char *str);
+syntax_analyse(char *str);
 // analyses the given expression, converting it into tree
 
 struct SuperStorage

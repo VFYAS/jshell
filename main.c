@@ -15,7 +15,7 @@ delete_all(void)
 {
     struct SuperStorage storage = saver(NULL);
     delete_expression_tree(storage.parsing_tree, &storage);
-    free((void *) storage.string);
+    free(storage.string);
 }
 
 int
@@ -26,13 +26,13 @@ main(void)
     int c;
     long long idx = 0, str_len = INIT_STR_SIZE;
     c = fgetc(stdin);
-    if (c == EOF || c == '\n') { // TODO: get rid of \n
+    if (c == EOF) {
         // if the expression is empty
         free(str);
         fprintf(stderr, "Empty statement!\n");
         exit(ERROR_EXIT);
     }
-    while (c != EOF && c != '\n') {
+    while (c != EOF) {
         if (idx == str_len) {
             str_len <<= 1;
             str = realloc(str, str_len * sizeof(*str));

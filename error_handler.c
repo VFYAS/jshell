@@ -9,7 +9,7 @@ set_error_number(struct SuperStorage *storage, enum ErrorCode code)
     if (!storage->container.err_happened) {
         storage->container.err_happened = 1;
         storage->container.code = code;
-        storage->container.place = (char *) (storage->string + storage->position);
+        storage->container.place = (storage->string + storage->position);
     }
 }
 

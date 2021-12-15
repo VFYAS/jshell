@@ -19,7 +19,7 @@ enum ErrorCode
 typedef struct
 {
     enum ErrorCode code;
-    char *place;
+    const char *place;
     int err_happened;
 } ErrorContainer;
 

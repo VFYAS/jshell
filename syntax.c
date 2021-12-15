@@ -417,7 +417,7 @@ saver(struct SuperStorage *storage)
 }
 
 struct SuperStorage
-syntax_analyse(const char *str)
+syntax_analyse(char *str)
 {
     struct SuperStorage storage = {};
     storage.string = str;
