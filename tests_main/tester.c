@@ -18,6 +18,11 @@ enum
     ARGC_NEEDED = 5
 };
 
+enum
+{
+    BUF_SIZE = 1024
+};
+
 enum Errors
 {
     NO_FILES_ERROR = 0x02,
@@ -27,14 +32,16 @@ enum Errors
 int
 cmp_files(int fd1, int fd2)
 {
-    char c1, c2;
+    char buf1[BUF_SIZE], buf2[BUF_SIZE];
     ssize_t syscall_ret1, syscall_ret2;
     do {
-        if ((syscall_ret1 = read(fd1, &c1, sizeof(c1))) < 0 || (syscall_ret2 = read(fd2, &c2, sizeof c2)) < 0) {
+        if ((syscall_ret1 = read(fd1, buf1, sizeof(buf1))) < 0 || (syscall_ret2 = read(fd2, buf2, sizeof buf2)) < 0) {
             exit(1);
-        }
-        if (c1 != c2) {
-            return 0;
+        }// works for the certain situation, won't work in general case
+        for (int i = 0; i < syscall_ret1; ++i) {
+            if (buf1[i] != buf2[i]) {
+                return 0;
+            }
         }
     } while (syscall_ret1 != 0 && syscall_ret2 != 0);
     if (syscall_ret1 == 0 && syscall_ret2 == 0) {

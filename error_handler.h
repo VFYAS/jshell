@@ -16,12 +16,12 @@ enum ErrorCode
     SIGNAL_ADD = 0x80
 };
 
-typedef struct
+struct ErrorContainer
 {
     enum ErrorCode code;
     const char *place;
     int err_happened;
-} ErrorContainer;
+};
 
 struct SuperStorage;
 

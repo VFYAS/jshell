@@ -60,7 +60,7 @@ struct SuperStorage
     struct ExpressionTree *parsing_tree;
     char *string;
     unsigned long long position;
-    ErrorContainer container;
+    struct ErrorContainer container;
 };
 
 void

@@ -1,0 +1,1 @@
+echo -n sdaxx | wc -l | cat && uname | cat | wc
