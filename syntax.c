@@ -403,6 +403,9 @@ parse_seps(struct SuperStorage *storage)
         tree1 = parent;
         storage->parsing_tree = parent;
         prev_pos = storage->position;
+        if (tree2 == NULL) {
+            return tree1;
+        }
     }
 }
 

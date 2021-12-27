@@ -1,1 +1,1 @@
-pwd | cat | cat | cat | cat | wc
+pwd | cat | cat | cat | cat | wc -l
